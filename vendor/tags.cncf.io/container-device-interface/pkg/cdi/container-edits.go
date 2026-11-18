@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	oci "github.com/opencontainers/runtime-spec/specs-go"
 	"tags.cncf.io/container-device-interface/internal/ociedit"
@@ -79,6 +80,9 @@ func (e *ContainerEdits) Apply(spec *oci.Spec) error {
 	if e == nil || e.ContainerEdits == nil {
 		return nil
 	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
 
 	editor, err := ociedit.NewSpecEditor(spec)
 	if err != nil {
@@ -89,7 +93,12 @@ func (e *ContainerEdits) Apply(spec *oci.Spec) error {
 	}
 
 	for _, d := range e.DeviceNodes {
-		dn := DeviceNode{d}
+		// Work on a copy of the device node. e.DeviceNodes may point into a
+		// cached Spec (see Cache.InjectDevices), and fillMissingInfo() must
+		// not write host-derived information back into the cache: that would
+		// make later injections skip the host check and reuse stale values,
+		// and it races with concurrent injections of the same device.
+		dn := (&DeviceNode{d}).DeepCopy()
 
 		err := dn.fillMissingInfo()
 		if err != nil {
@@ -111,15 +120,19 @@ func (e *ContainerEdits) Apply(spec *oci.Spec) error {
 		editor.AddDevice(dev)
 
 		if dev.Type == "b" || dev.Type == "c" {
-			access := d.Permissions
-			switch access {
-			case "":
-				access = "rwm"
-			case NoPermissions:
-				access = ""
-			}
-			editor.AddLinuxResourcesDevice(true, dev.Type, &dev.Major, &dev.Minor, access)
+			editor.AddLinuxResourcesDevice(true, dev.Type, &dev.Major, &dev.Minor, cgroupAccess(d.Permissions))
 		}
+	}
+
+	for _, r := range e.DeviceCgroupRules {
+		rule := DeviceCgroupRule{r}
+		major := rule.Major
+		minor := new(int64)
+		*minor = rule.Minor
+		if r.Minor == cdi.DeviceCgroupMinorAny {
+			minor = nil
+		}
+		editor.AddLinuxResourcesDevice(true, rule.Type, &major, minor, cgroupAccess(rule.Permissions))
 	}
 
 	if len(e.NetDevices) > 0 {
@@ -134,10 +147,10 @@ func (e *ContainerEdits) Apply(spec *oci.Spec) error {
 
 			editor.RemoveMount(m.ContainerPath)
 
-			if !specHasUserNamespace(spec) {
-				editor.AddMount(mnt.toOCI())
-			} else {
+			if specHasIDMappingNamespace(spec) && idMapMountsAvailable() {
 				editor.AddMount(mnt.toOCI(withIDMapForBindMount()))
+			} else {
+				editor.AddMount(mnt.toOCI())
 			}
 		}
 		sortMounts(editor)
@@ -191,6 +204,11 @@ func (e *ContainerEdits) Validate() error {
 			return err
 		}
 	}
+	for _, r := range e.DeviceCgroupRules {
+		if err := (&DeviceCgroupRule{r}).Validate(); err != nil {
+			return err
+		}
+	}
 	for _, h := range e.Hooks {
 		if err := (&Hook{h}).Validate(); err != nil {
 			return err
@@ -228,6 +246,7 @@ func (e *ContainerEdits) Append(o *ContainerEdits) *ContainerEdits {
 
 	e.Env = append(e.Env, o.Env...)
 	e.DeviceNodes = append(e.DeviceNodes, o.DeviceNodes...)
+	e.DeviceCgroupRules = append(e.DeviceCgroupRules, o.DeviceCgroupRules...)
 	e.NetDevices = append(e.NetDevices, o.NetDevices...)
 	e.Hooks = append(e.Hooks, o.Hooks...)
 	e.Mounts = append(e.Mounts, o.Mounts...)
@@ -249,6 +268,9 @@ func (e *ContainerEdits) isEmpty() bool {
 		return false
 	}
 	if len(e.DeviceNodes) > 0 {
+		return false
+	}
+	if len(e.DeviceCgroupRules) > 0 {
 		return false
 	}
 	if len(e.Hooks) > 0 {
@@ -313,6 +335,9 @@ type LinuxNetDevice struct {
 
 // Validate LinuxNetDevice.
 func (d *LinuxNetDevice) Validate() error {
+	if d.LinuxNetDevice == nil {
+		return errors.New("invalid (nil) linux net device")
+	}
 	if d.HostInterfaceName == "" {
 		return errors.New("invalid linux net device, empty HostInterfaceName")
 	}
@@ -337,11 +362,18 @@ func (d *DeviceNode) Validate() error {
 		"p": {},
 	}
 
+	if d.DeviceNode == nil {
+		return errors.New("invalid (nil) device node")
+	}
 	if d.Path == "" {
 		return errors.New("invalid (empty) device path")
 	}
 	if _, ok := validTypes[d.Type]; !ok {
 		return fmt.Errorf("device %q: invalid type %q", d.Path, d.Type)
+	}
+	// NOTE: negative numbers are rejected as -1 is interpreted as a wildcard
+	if d.Major < 0 || d.Minor < 0 {
+		return fmt.Errorf("device %q: invalid (negative) device number %d:%d", d.Path, d.Major, d.Minor)
 	}
 	switch {
 	case d.Permissions == "":
@@ -354,6 +386,79 @@ func (d *DeviceNode) Validate() error {
 	return nil
 }
 
+// DeepCopy a DeviceNode. It returns a copy of the given device node that
+// shares no pointers with it, so that filling in or exporting the copy
+// cannot modify the original (for instance a device node of a cached Spec).
+func (d *DeviceNode) DeepCopy() *DeviceNode {
+	if d == nil {
+		return nil
+	}
+	if d.DeviceNode == nil {
+		return &DeviceNode{}
+	}
+
+	ccdi := *(d.DeviceNode)
+	c := &DeviceNode{&ccdi}
+
+	if d.FileMode != nil {
+		mode := *d.FileMode
+		c.FileMode = &mode
+	}
+	if d.UID != nil {
+		uid := *d.UID
+		c.UID = &uid
+	}
+	if d.GID != nil {
+		gid := *d.GID
+		c.GID = &gid
+	}
+	return c
+}
+
+func cgroupAccess(permissions string) string {
+	switch permissions {
+	case "":
+		return "rwm"
+	case NoPermissions:
+		return ""
+	}
+	return permissions
+}
+
+// DeviceCgroupRule is a CDI Spec DeviceCgroupRule wrapper, used for validating device cgroup rules.
+type DeviceCgroupRule struct {
+	*cdi.DeviceCgroupRule
+}
+
+// Validate a CDI Spec DeviceCgroupRule.
+func (r *DeviceCgroupRule) Validate() error {
+	// NOTE: stick with the types of the kernel devices cgroup interface.
+	// The extra types ("p" and "u") allowed in the container config are not accepted.
+	// Also, "a" is denied on purpose as that would allow all devices and ignore the
+	// major/minor filtering.
+	switch r.Type {
+	case "b", "c":
+	default:
+		return fmt.Errorf("device cgroup rule %s: invalid type %q", r, r.Type)
+	}
+	if r.Major <= 0 {
+		return fmt.Errorf("device cgroup rule %s: major device number must be greater than 0", r)
+	}
+	if r.Minor < 0 && r.Minor != cdi.DeviceCgroupMinorAny {
+		return fmt.Errorf("device cgroup rule %s: minor device number must be non-negative or %d", r, cdi.DeviceCgroupMinorAny)
+	}
+	if strings.Trim(r.Permissions, "rwm") != "" {
+		return fmt.Errorf("device cgroup rule %s: invalid permissions %q", r, r.Permissions)
+	}
+
+	return nil
+}
+
+// String returns the rule in the "<type> <major>:<minor> <permissions>" format.
+func (r *DeviceCgroupRule) String() string {
+	return fmt.Sprintf("%s %d:%d %s", r.Type, r.Major, r.Minor, cgroupAccess(r.Permissions))
+}
+
 // Hook is a CDI Spec Hook wrapper, used for validating hooks.
 type Hook struct {
 	*cdi.Hook
@@ -361,6 +466,9 @@ type Hook struct {
 
 // Validate a hook.
 func (h *Hook) Validate() error {
+	if h.Hook == nil {
+		return errors.New("invalid (nil) hook")
+	}
 	if _, ok := validHookNames[h.HookName]; !ok {
 		return fmt.Errorf("invalid hook name %q", h.HookName)
 	}
@@ -380,6 +488,9 @@ type Mount struct {
 
 // Validate a mount.
 func (m *Mount) Validate() error {
+	if m.Mount == nil {
+		return errors.New("invalid (nil) mount")
+	}
 	if m.HostPath == "" {
 		return errors.New("invalid mount, empty host path")
 	}
@@ -406,6 +517,9 @@ func ValidateIntelRdt(i *cdi.IntelRdt) error {
 
 // Validate validates the IntelRdt configuration.
 func (i *IntelRdt) Validate() error {
+	if i.IntelRdt == nil {
+		return nil
+	}
 	// ClosID must be a valid Linux filename. Exception: "/" refers to the root CLOS.
 	switch c := i.ClosID; {
 	case c == "/":
@@ -451,9 +565,22 @@ func (m orderedMounts) parts(i int) int {
 	return strings.Count(filepath.Clean(m[i].Destination), string(os.PathSeparator))
 }
 
-// specHasUserNamespace returns true if the OCI Spec has a Linux UserNamespace.
-func specHasUserNamespace(spec *oci.Spec) bool {
+// idMapMountsAvailable returns true if idmapped mounts can be set up in this
+// environment. The result is cached, since it can't change during the lifetime
+// of the process. It is a function variable to allow faking host detection in
+// unit tests.
+var idMapMountsAvailable = sync.OnceValue(canIDMapMounts)
+
+// specHasIDMappingNamespace returns true if the OCI Spec has a Linux UserNamespace
+// together with both UID and GID mappings. A user namespace lacking either
+// mapping (for instance one set up for a pod sharing its process namespace)
+// can't reliably be used for idmapped mounts: runc rejects idmapped mounts
+// unless both mappings are present.
+func specHasIDMappingNamespace(spec *oci.Spec) bool {
 	if spec == nil || spec.Linux == nil {
+		return false
+	}
+	if len(spec.Linux.UIDMappings) == 0 || len(spec.Linux.GIDMappings) == 0 {
 		return false
 	}
 	for _, ns := range spec.Linux.Namespaces {

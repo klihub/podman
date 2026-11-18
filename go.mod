@@ -190,3 +190,7 @@ require (
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	tags.cncf.io/container-device-interface/specs-go v1.1.1 // indirect
 )
+
+replace tags.cncf.io/container-device-interface => github.com/klihub/container-device-interface v0.0.0-20261118180414-f313f6b32d1f
+
+replace tags.cncf.io/container-device-interface/specs-go => github.com/klihub/container-device-interface/specs-go v0.0.0-20261118180414-f313f6b32d1f

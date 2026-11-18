@@ -209,6 +209,10 @@ github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTf
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/pgzip v1.3.0 h1:8t+KjjzD/0n/8vNlJGGZmTeK4njuwffOQvJm8tOSc8o=
 github.com/klauspost/pgzip v1.3.0/go.mod h1:Xx7tAv5DH8ObLHUDQKXoE/nd8i/FYdNDTVMvi3SLTKI=
+github.com/klihub/container-device-interface v0.0.0-20261118180414-f313f6b32d1f h1:OJggel3LUakhXzUlxbKYLPeywb+S2PSRw+uwwfBpKBM=
+github.com/klihub/container-device-interface v0.0.0-20261118180414-f313f6b32d1f/go.mod h1:S1PSJWYPD4Iom0/39mvr/VVFCfG0Yt14j20d0OYrY2M=
+github.com/klihub/container-device-interface/specs-go v0.0.0-20261118180414-f313f6b32d1f h1:WWDsHhOzT7uPObH4N3eGObO4FzEU2Znp49C4nWkXRkA=
+github.com/klihub/container-device-interface/specs-go v0.0.0-20261118180414-f313f6b32d1f/go.mod h1:BhJIkjjPh4qpys+qm4DAYtUyryaTDg9zris+AczXyws=
 github.com/kr/fs v0.1.0 h1:Jskdu9ieNAYnjxsi0LbQp1ulIKZV1LAFgK1tWhpZgl8=
 github.com/kr/fs v0.1.0/go.mod h1:FFnZGqtBN9Gxj7eW1uZ42v5BccTP0vu6NEaFoC2HwRg=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=

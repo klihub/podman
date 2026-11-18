@@ -1243,13 +1243,15 @@ gopkg.in/yaml.v3
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# tags.cncf.io/container-device-interface v1.1.1
+# tags.cncf.io/container-device-interface v1.1.1 => github.com/klihub/container-device-interface v0.0.0-20261118180414-f313f6b32d1f
 ## explicit; go 1.23
 tags.cncf.io/container-device-interface/internal/ociedit
 tags.cncf.io/container-device-interface/internal/validation
 tags.cncf.io/container-device-interface/internal/validation/k8s
 tags.cncf.io/container-device-interface/pkg/cdi
 tags.cncf.io/container-device-interface/pkg/parser
-# tags.cncf.io/container-device-interface/specs-go v1.1.1
+# tags.cncf.io/container-device-interface/specs-go v1.1.1 => github.com/klihub/container-device-interface/specs-go v0.0.0-20261118180414-f313f6b32d1f
 ## explicit; go 1.19
 tags.cncf.io/container-device-interface/specs-go
+# tags.cncf.io/container-device-interface => github.com/klihub/container-device-interface v0.0.0-20261118180414-f313f6b32d1f
+# tags.cncf.io/container-device-interface/specs-go => github.com/klihub/container-device-interface/specs-go v0.0.0-20261118180414-f313f6b32d1f
